@@ -27,6 +27,22 @@ from smart_classroom.thumbnail import save_thumbnail
 
 st.set_page_config(page_title="Smart Classroom Edge", layout="wide")
 
+# Inject a minimal dark theme and spacing CSS to give a modern control-center look
+_DARK_CSS = """
+body { background-color: #0f1720; color: #e6eef3; }
+.stApp { background-color: #0f1720; }
+.css-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
+.card { background: #0b1320; padding: 12px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.6); }
+.small-muted { color: #9fb0c8; font-size: 0.9em }
+.large-title { font-size: 1.25rem; font-weight: 700; }
+.center { display:flex; align-items:center; justify-content:center }
+.thumb-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap:8px }
+"""
+try:
+    st.markdown(f"<style>{_DARK_CSS}</style>", unsafe_allow_html=True)
+except Exception:
+    pass
+
 MODEL_DEFAULT = "model.onnx"
 CLASS_MAP = {"low": 0, "medium": 1, "high": 2}
 
@@ -251,13 +267,12 @@ def process_video_file(path: str, clf, storage=None, storage_queue=None, attenda
 
 
 def render_dashboard():
-    # top summary cards
-    c1, c2, c3 = st.columns(3)
+    # top summary and large occupancy gauge
+    c1, c2 = st.columns([2, 1])
     with c1:
         today_att_card = st.empty()
-    with c2:
         total_events_card = st.empty()
-    with c3:
+    with c2:
         current_occ_card = st.empty()
 
     # layout with tabs: Live / History / Attendance
@@ -266,32 +281,44 @@ def render_dashboard():
     with tab_live:
         col1, col2 = st.columns([2, 1])
         with col1:
-            st.header("Live Camera Feed")
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown('<div class="large-title">Live Camera Feed</div>', unsafe_allow_html=True)
             img_placeholder = st.empty()
-            st.markdown("---")
-            st.header("Occupancy History (recent)")
+            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown('<div class="large-title">Occupancy History (recent)</div>', unsafe_allow_html=True)
             hist_placeholder = st.empty()
+            st.markdown('</div>', unsafe_allow_html=True)
         with col2:
-            st.header("Status")
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown('<div class="large-title">Status</div>', unsafe_allow_html=True)
             level_placeholder = st.empty()
             conf_placeholder = st.empty()
             ac_placeholder = st.empty()
             temp_placeholder = st.empty()
             runtime_placeholder = st.empty()
-            st.markdown("---")
-            st.header("Event Log")
+            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown('<div class="large-title">Event Log</div>', unsafe_allow_html=True)
             event_placeholder = st.empty()
+            st.markdown('</div>', unsafe_allow_html=True)
 
     with tab_history:
-        st.header("Full Occupancy History")
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="large-title">Full Occupancy History</div>', unsafe_allow_html=True)
         history_chart = st.empty()
-        st.markdown("---")
-        st.header("Event Log (persisted)")
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="large-title">Event Log (persisted)</div>', unsafe_allow_html=True)
         history_events = st.empty()
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with tab_att:
-        st.header("Attendance Records")
-        # filters: date range and person
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="large-title">Attendance Records</div>', unsafe_allow_html=True)
         fcol1, fcol2, fcol3 = st.columns([1, 2, 1])
         with fcol1:
             date_range = st.date_input("Date range", [])
@@ -299,13 +326,15 @@ def render_dashboard():
             person_filter = st.text_input("Person (leave empty for all)")
         with fcol3:
             att_search = st.text_input("Search attendance (level/confidence)")
-
-        st.markdown("---")
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
         att_table = st.empty()
-        st.markdown("---")
-        st.header("Export")
+        st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="large-title">Export</div>', unsafe_allow_html=True)
         export_att = st.button("Export attendance CSV")
         att_export_placeholder = st.empty()
+        st.markdown('</div>', unsafe_allow_html=True)
 
     return {
         'img': img_placeholder,
@@ -446,7 +475,9 @@ def main():
     if not st.session_state.history.empty:
         df = st.session_state.history.copy()
         df['timestamp'] = pd.to_datetime(df['timestamp'])
-        fig = px.line(df, x='timestamp', y=['low','medium','high'], labels={'value':'confidence','variable':'class'})
+        # enhanced area chart for analytics
+        fig = px.area(df, x='timestamp', y=['low', 'medium', 'high'], labels={'value':'confidence','variable':'class'}, template='plotly_dark')
+        fig.update_layout(margin=dict(t=10,b=10,l=10,r=10), legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1))
         placeholders['hist'].plotly_chart(fig, use_container_width=True)
     else:
         placeholders['hist'].text("No history yet")
@@ -480,10 +511,10 @@ def main():
                     today_count += 1
                     if a.get('person'):
                         persons.add(a.get('person'))
-            placeholders['today_att_card'].metric("Today's Attendance", today_count)
+            placeholders['today_att_card'].markdown(f"<div class=\"card\"><div class=\"large-title\">Today's Attendance</div><div class=\"small-muted\">{today_count} present today</div></div>", unsafe_allow_html=True)
             # total events
             evs = st.session_state.storage.get_events(limit=None)
-            placeholders['total_events_card'].metric('Total Events', len(evs))
+            placeholders['total_events_card'].markdown(f"<div class=\"card\"><div class=\"large-title\">Total Events</div><div class=\"small-muted\">{len(evs)}</div></div>", unsafe_allow_html=True)
         else:
             placeholders['today_att_card'].text("No storage")
             placeholders['total_events_card'].text("No storage")
@@ -495,7 +526,18 @@ def main():
     try:
         cur_label = st.session_state.label
         cur_conf = max(st.session_state.confidences.get('medium', 0.0), st.session_state.confidences.get('high', 0.0))
-        placeholders['current_occ_card'].metric('Current Occupancy', cur_label, f"{cur_conf:.2f}")
+        # large gauge indicator (plotly)
+        import plotly.graph_objects as go
+        val = float(cur_conf) * 100.0
+        gauge = go.Figure(go.Indicator(
+            mode="gauge+number+delta",
+            value=val,
+            delta={'reference': 0},
+            gauge={'axis': {'range': [None, 100]}, 'bar': {'color': "#00E5FF"}},
+            title={'text': f"{cur_label.upper()}"}
+        ))
+        gauge.update_layout(height=260, margin=dict(t=10,b=10,l=10,r=10), paper_bgcolor='rgba(0,0,0,0)', font={'color':'#e6eef3'})
+        placeholders['current_occ_card'].plotly_chart(gauge, use_container_width=True)
     except Exception:
         placeholders['current_occ_card'].text('N/A')
 
@@ -514,21 +556,34 @@ def main():
             persisted_events = st.session_state.storage.get_events()
             if persisted_events:
                 # render recent events with thumbnails (most recent first)
-                for e in persisted_events[:50]:
-                    cols = st.columns([1, 5])
-                    thumb = e.get('thumbnail_path')
-                    if thumb:
+                # thumbnail gallery + timeline
+                thumbs = [e for e in persisted_events if e.get('thumbnail_path')]
+                if thumbs:
+                    st.markdown('<div class="thumb-grid">', unsafe_allow_html=True)
+                    for e in thumbs[:40]:
                         try:
-                            p = Path(thumb)
+                            p = Path(e.get('thumbnail_path'))
                             if p.exists():
-                                cols[0].image(str(p), use_column_width=True)
+                                st.image(str(p), use_column_width=True)
                             else:
-                                cols[0].text('missing')
+                                st.write('missing')
                         except Exception:
-                            cols[0].text('err')
-                    else:
-                        cols[0].text('')
-                    cols[1].markdown(f"**{e.get('timestamp')}** — **{e.get('level')}**  \n{e.get('message')}  \nlow:{e.get('confidences',{}).get('low',0):.2f} medium:{e.get('confidences',{}).get('medium',0):.2f} high:{e.get('confidences',{}).get('high',0):.2f}")
+                            st.write('err')
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                # event timeline chart
+                try:
+                    import plotly.express as _px
+                    tev = persisted_events[:200]
+                    dftev = pd.DataFrame([{'timestamp': r['timestamp'], 'level': r['level'], 'msg': r['message']} for r in tev])
+                    if not dftev.empty:
+                        dftev['timestamp'] = pd.to_datetime(dftev['timestamp'])
+                        tfig = _px.scatter(dftev, x='timestamp', y=[1]*len(dftev), color='level', hover_data=['msg'], height=200)
+                        tfig.update_yaxes(visible=False)
+                        tfig.update_layout(margin=dict(t=10,b=10,l=10,r=10), template='plotly_dark')
+                        placeholders['history_events'].plotly_chart(tfig, use_container_width=True)
+                except Exception:
+                    pass
             else:
                 placeholders['history_events'].text('No persisted events')
 
