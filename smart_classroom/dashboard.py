@@ -399,6 +399,19 @@ def main():
 
     placeholders = render_dashboard()
 
+    # If no ONNX model is available, show a clear message in the main UI and provide instructions
+    if not (resolved and Path(resolved).exists()):
+        try:
+            st.error("No ONNX model found. Please provide a model file.")
+            st.markdown("""
+            **How to provide a model**
+
+            - Place your ONNX model (for example `model.onnx`) in the repository root or provide an absolute path in the sidebar.
+            - Or run the helper script: `python scripts/download_sample_model.py` to download a sample ONNX model into the repository root.
+            """)
+        except Exception:
+            pass
+
     # start/stop handling
     if source == 'Live Camera' and start_button and not st.session_state.running:
         # use the resolved model path determined in the sidebar

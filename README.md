@@ -40,6 +40,20 @@ streamlit run smart_classroom/dashboard.py --server.port 8501
 
 4. In the app, set the path to your ONNX model and start the camera.
 
+Model note
+----------
+
+The repository intentionally excludes ONNX binaries via `.gitignore` (pattern `*.onnx`). If you don't have a model in the repo, you can:
+
+- Place your ONNX model (for example `model.onnx`) in the repository root or provide an absolute path in the app sidebar.
+- Run the helper to download a sample model locally:
+
+```bash
+python scripts/download_sample_model.py
+```
+
+This will save `model.onnx` to the repository root for local development (the file is still ignored by git by default).
+
 ## Uploads and Exports
 
 - Switch `Source` in the sidebar to `Upload Video` to process an uploaded MP4/AVI/MOV file. Uploaded files are saved to `data/uploads/` and thumbnails are written to `data/thumbnails/`.
