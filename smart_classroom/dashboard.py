@@ -35,9 +35,17 @@ def sidebar_controls():
     st.sidebar.header("Settings")
     model_path = st.sidebar.text_input("ONNX model path", value=MODEL_DEFAULT)
     cam_index = st.sidebar.number_input("Camera index", min_value=0, max_value=10, value=0)
-    start_button = st.sidebar.button("Start")
-    stop_button = st.sidebar.button("Stop")
-    return model_path, cam_index, start_button, stop_button
+    source = st.sidebar.radio("Source", ["Live Camera", "Upload Video"])
+    upload_file = None
+    upload_start = False
+    if source == 'Upload Video':
+        upload_file = st.sidebar.file_uploader("Upload video (mp4, avi, mov)", type=['mp4', 'avi', 'mov'])
+        upload_start = st.sidebar.button("Start Upload")
+        stop_button = st.sidebar.button("Stop")
+    else:
+        start_button = st.sidebar.button("Start")
+        stop_button = st.sidebar.button("Stop")
+    return model_path, cam_index, start_button, stop_button, source, upload_file, upload_start
 
 
 def init_state():
@@ -172,6 +180,76 @@ def camera_thread(cam_index: int):
         cap.release()
 
 
+def process_video_file(path: str, clf, storage=None, storage_queue=None, attendance=None, thumbnail_dir=None, update_callback=None, frame_delay=0.2):
+    """Process a video file frame-by-frame, run inference, and persist results.
+
+    - path: filesystem path to video file
+    - clf: classifier with .predict(frame) -> (label, confidences)
+    - storage: optional Storage instance for synchronous writes
+    - storage_queue: optional queue for background writes (takes precedence)
+    - attendance: optional AttendanceController
+    - thumbnail_dir: optional directory to save thumbnails (pass Path or str)
+    - update_callback: optional callable(frame, label, confidences, timestamp)
+    """
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        return
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            try:
+                label, confidences = clf.predict(frame)
+            except Exception:
+                label = 'error'
+                confidences = {'low': 0.0, 'medium': 0.0, 'high': 0.0}
+            ts = datetime.utcnow()
+            # UI update callback (dashboard provides one)
+            if update_callback:
+                try:
+                    update_callback(frame.copy(), label, confidences, ts)
+                except Exception:
+                    pass
+
+            # persist or enqueue
+            thumb_path = ''
+            try:
+                if thumbnail_dir:
+                    from pathlib import Path as _P
+                    td = _P(thumbnail_dir)
+                    thumb_path = save_thumbnail(frame.copy(), out_dir=td, timestamp=ts)
+            except Exception:
+                thumb_path = ''
+
+            if storage_queue is not None:
+                try:
+                    storage_queue.put(('add_event', (label, 'video_frame', confidences, ts, thumb_path)))
+                    storage_queue.put(('add_occupancy', (confidences.get('low', 0.0), confidences.get('medium', 0.0), confidences.get('high', 0.0), ts)))
+                    if attendance is not None:
+                        att = attendance.process_sample(confidences, ts)
+                        if att is not None:
+                            storage_queue.put(('add_attendance', (att.get('person', 'unknown'), att.get('timestamp'), att.get('level'), att.get('confidence'), thumb_path)))
+                            storage_queue.put(('add_event', ('medium', f"attendance:{att.get('person')}", {'low':0.0,'medium':att.get('confidence',0.0),'high':0.0}, att.get('timestamp'), thumb_path)))
+                except Exception:
+                    pass
+            elif storage is not None:
+                try:
+                    storage.add_event(label, 'video_frame', confidences, ts, thumb_path)
+                    storage.add_occupancy(confidences.get('low', 0.0), confidences.get('medium', 0.0), confidences.get('high', 0.0), ts)
+                    if attendance is not None:
+                        att = attendance.process_sample(confidences, ts)
+                        if att is not None:
+                            storage.add_attendance(att.get('person', 'unknown'), att.get('timestamp'), att.get('level'), att.get('confidence'), thumb_path)
+                            storage.add_event('medium', f"attendance:{att.get('person')}", {'low':0.0,'medium':att.get('confidence',0.0),'high':0.0}, att.get('timestamp'), thumb_path)
+                except Exception:
+                    pass
+
+            time.sleep(frame_delay)
+    finally:
+        cap.release()
+
+
 def render_dashboard():
     # top summary cards
     c1, c2, c3 = st.columns(3)
@@ -250,13 +328,13 @@ def render_dashboard():
 
 
 def main():
-    model_path, cam_index, start_button, stop_button = sidebar_controls()
+    model_path, cam_index, start_button, stop_button, source, upload_file, upload_start = sidebar_controls()
     init_state()
 
     placeholders = render_dashboard()
 
     # start/stop handling
-    if start_button and not st.session_state.running:
+    if source == 'Live Camera' and start_button and not st.session_state.running:
         try:
             st.session_state.clf = OnnxClassifier(model_path)
         except Exception as e:
@@ -270,8 +348,66 @@ def main():
         t = threading.Thread(target=camera_thread, args=(cam_index,), daemon=True)
         t.start()
 
-    if stop_button and st.session_state.running:
+    # Upload start handling
+    if source == 'Upload Video' and upload_start and upload_file is not None and not st.session_state.get('running_upload', False):
+        # write uploaded file to disk and start processing thread
+        try:
+            from pathlib import Path
+            up_dir = Path.cwd() / 'data' / 'uploads'
+            up_dir.mkdir(parents=True, exist_ok=True)
+            out_path = up_dir / upload_file.name
+            # stream bytes to file
+            with open(out_path, 'wb') as f:
+                f.write(upload_file.getbuffer())
+            # ensure classifier loaded
+            try:
+                st.session_state.clf = OnnxClassifier(model_path)
+            except Exception as e:
+                st.error(f"Failed to load model: {e}")
+                return
+            st.session_state.running_upload = True
+            st.session_state.start_time = datetime.utcnow()
+
+            def _upload_callback(frame, label, confidences, ts):
+                # mimic camera_thread updates into session state
+                with st.session_state.lock:
+                    st.session_state.frame = frame
+                    st.session_state.label = label
+                    st.session_state.confidences = confidences
+                    row = {'timestamp': ts, 'level': label, 'low': confidences.get('low',0.0), 'medium': confidences.get('medium',0.0), 'high': confidences.get('high',0.0)}
+                    st.session_state.history = pd.concat([st.session_state.history, pd.DataFrame([row])], ignore_index=True)
+                    event = st.session_state.ac.update(label, confidences)
+                    st.session_state.events.append(event)
+                    # enqueue writes using storage_write_queue
+                    try:
+                        q = st.session_state.storage_write_queue
+                        thumb = ''
+                        try:
+                            thumb = save_thumbnail(frame.copy(), timestamp=ts)
+                        except Exception:
+                            thumb = ''
+                        q.put(('add_event', (label, event.message, confidences, ts, thumb)))
+                        q.put(('add_occupancy', (confidences.get('low',0.0), confidences.get('medium',0.0), confidences.get('high',0.0), ts)))
+                        try:
+                            att = st.session_state.attendance.process_sample(confidences, ts)
+                            if att is not None:
+                                q.put(('add_attendance', (att.get('person','unknown'), att.get('timestamp'), att.get('level'), att.get('confidence'), thumb)))
+                                q.put(('add_event', ('medium', f"attendance:{att.get('person')}", {'low':0.0,'medium':att.get('confidence',0.0),'high':0.0}, att.get('timestamp'), thumb)))
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+
+            # start background thread to process file
+            t = threading.Thread(target=process_video_file, args=(str(out_path), st.session_state.clf), kwargs={'storage_queue': st.session_state.storage_write_queue, 'attendance': st.session_state.attendance, 'thumbnail_dir': str(Path.cwd() / 'data' / 'thumbnails'), 'update_callback': _upload_callback}, daemon=True)
+            t.start()
+            st.session_state._upload_thread = t
+        except Exception as e:
+            st.error(f"Failed to start upload processing: {e}")
+
+    if (stop_button and st.session_state.running) or (stop_button and st.session_state.get('running_upload', False)):
         st.session_state.running = False
+        st.session_state.running_upload = False
 
     # UI update loop (Streamlit reruns every interaction)
     # show image
