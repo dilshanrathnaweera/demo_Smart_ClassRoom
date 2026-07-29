@@ -9,6 +9,7 @@ if root_str not in sys.path:
     sys.path.insert(0, root_str)
 
 import streamlit as st
+import queue
 import cv2
 import threading
 import time
@@ -58,6 +59,51 @@ def init_state():
         st.session_state.ac = ACController()
     if 'clf' not in st.session_state:
         st.session_state.clf = None
+    # storage integration: create Storage and a background writer queue/thread for non-blocking writes
+    if 'storage' not in st.session_state:
+        try:
+            from smart_classroom.storage import Storage
+            st.session_state.storage = Storage()
+        except Exception:
+            st.session_state.storage = None
+    if 'storage_write_queue' not in st.session_state:
+        st.session_state.storage_write_queue = queue.Queue()
+
+        def _writer_loop(q, storage):
+            while True:
+                task = q.get()
+                if task is None:
+                    break
+                method, args = task
+                try:
+                    if storage:
+                        getattr(storage, method)(*args)
+                except Exception:
+                    # don't raise in background writer; could log
+                    pass
+
+        t = threading.Thread(target=_writer_loop, args=(st.session_state.storage_write_queue, st.session_state.storage), daemon=True)
+        t.start()
+        st.session_state._storage_writer_thread = t
+
+    # preload persisted history and events into session state
+    try:
+        if st.session_state.storage:
+            # load recent occupancy history (oldest first)
+            oh = st.session_state.storage.get_occupancy_history(limit=1000)[::-1]
+            if not oh:
+                st.session_state.history = pd.DataFrame(columns=['timestamp','level','low','medium','high'])
+            else:
+                df = pd.DataFrame([{'timestamp': r['timestamp'], 'level': None, 'low': r['low'], 'medium': r['medium'], 'high': r['high']} for r in oh])
+                st.session_state.history = df
+            # load recent events
+            evs = st.session_state.storage.get_events()
+            st.session_state.events = []
+            for e in evs[::-1]:
+                # keep structure similar to ACEvent minimal fields
+                st.session_state.events.append(type('E', (), {'timestamp': e['timestamp'], 'level': e['level'], 'message': e['message'], 'confidences': e['confidences']}))
+    except Exception:
+        pass
 
 
 def camera_thread(cam_index: int):
@@ -86,37 +132,52 @@ def camera_thread(cam_index: int):
                 ts = datetime.utcnow()
                 row = {'timestamp': ts, 'level': label, 'low': confidences.get('low',0.0), 'medium': confidences.get('medium',0.0), 'high': confidences.get('high',0.0)}
                 st.session_state.history = pd.concat([st.session_state.history, pd.DataFrame([row])], ignore_index=True)
-                # update AC
+                # update AC and record event
                 event = st.session_state.ac.update(label, confidences)
                 st.session_state.events.append(event)
+                # enqueue writes to storage (non-blocking)
+                try:
+                    q = st.session_state.storage_write_queue
+                    # add event (use ACEvent timestamp)
+                    q.put(('add_event', (label, event.message, confidences, event.timestamp)))
+                    # add occupancy sample
+                    q.put(('add_occupancy', (confidences.get('low',0.0), confidences.get('medium',0.0), confidences.get('high',0.0), ts)))
+                except Exception:
+                    pass
             time.sleep(0.2)
     finally:
         cap.release()
 
 
 def render_dashboard():
-    # layout
-    col1, col2 = st.columns([2, 1])
+    # layout with tabs: Live / History
+    tab_live, tab_history = st.tabs(["Live", "History"])
 
-    with col1:
-        st.header("Live Camera Feed")
-        img_placeholder = st.empty()
+    with tab_live:
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            st.header("Live Camera Feed")
+            img_placeholder = st.empty()
+            st.markdown("---")
+            st.header("Occupancy History (recent)")
+            hist_placeholder = st.empty()
+        with col2:
+            st.header("Status")
+            level_placeholder = st.empty()
+            conf_placeholder = st.empty()
+            ac_placeholder = st.empty()
+            temp_placeholder = st.empty()
+            runtime_placeholder = st.empty()
+            st.markdown("---")
+            st.header("Event Log")
+            event_placeholder = st.empty()
 
+    with tab_history:
+        st.header("Full Occupancy History")
+        history_chart = st.empty()
         st.markdown("---")
-        st.header("Occupancy History")
-        hist_placeholder = st.empty()
-
-    with col2:
-        st.header("Status")
-        level_placeholder = st.empty()
-        conf_placeholder = st.empty()
-        ac_placeholder = st.empty()
-        temp_placeholder = st.empty()
-        runtime_placeholder = st.empty()
-
-        st.markdown("---")
-        st.header("Event Log")
-        event_placeholder = st.empty()
+        st.header("Event Log (persisted)")
+        history_events = st.empty()
 
     return {
         'img': img_placeholder,
@@ -127,6 +188,8 @@ def render_dashboard():
         'temp': temp_placeholder,
         'runtime': runtime_placeholder,
         'events': event_placeholder,
+        'history_chart': history_chart,
+        'history_events': history_events,
     }
 
 
@@ -187,7 +250,7 @@ def main():
     else:
         placeholders['runtime'].write("00:00:00")
 
-    # history chart
+    # history chart is also available in the History tab; here show a small recent chart
     if not st.session_state.history.empty:
         df = st.session_state.history.copy()
         df['timestamp'] = pd.to_datetime(df['timestamp'])
@@ -206,6 +269,30 @@ def main():
         placeholders['events'].dataframe(ev_df)
     else:
         placeholders['events'].text("No events yet")
+
+    # History tab content: load from persistent storage
+    try:
+        if st.session_state.storage:
+            oh = st.session_state.storage.get_occupancy_history(limit=2000)[::-1]
+            if oh:
+                dfh = pd.DataFrame([{'timestamp': r['timestamp'], 'low': r['low'], 'medium': r['medium'], 'high': r['high']} for r in oh])
+                dfh['timestamp'] = pd.to_datetime(dfh['timestamp'])
+                figh = px.line(dfh, x='timestamp', y=['low', 'medium', 'high'], labels={'value':'confidence','variable':'class'})
+                placeholders['history_chart'].plotly_chart(figh, use_container_width=True)
+            else:
+                placeholders['history_chart'].text('No persisted history')
+
+            persisted_events = st.session_state.storage.get_events()
+            if persisted_events:
+                pe_rows = []
+                for e in persisted_events:
+                    pe_rows.append({'timestamp': e['timestamp'], 'level': e['level'], 'message': e['message'], 'low': e['confidences'].get('low'), 'medium': e['confidences'].get('medium'), 'high': e['confidences'].get('high')})
+                placeholders['history_events'].dataframe(pd.DataFrame(pe_rows))
+            else:
+                placeholders['history_events'].text('No persisted events')
+    except Exception:
+        placeholders['history_chart'].text('Failed to load persisted history')
+        placeholders['history_events'].text('Failed to load persisted events')
 
 
 if __name__ == '__main__':
