@@ -449,7 +449,6 @@ def main():
     if source == 'Upload Video' and upload_start and upload_file is not None and not st.session_state.get('running_upload', False):
         # write uploaded file to disk and start processing thread
         try:
-            from pathlib import Path
             up_dir = Path.cwd() / 'data' / 'uploads'
             up_dir.mkdir(parents=True, exist_ok=True)
             out_path = up_dir / upload_file.name
@@ -516,6 +515,8 @@ def main():
             t = threading.Thread(target=process_video_file, args=(str(out_path), st.session_state.clf), kwargs={'storage_queue': st.session_state.storage_write_queue, 'attendance': st.session_state.attendance, 'thumbnail_dir': str(Path.cwd() / 'data' / 'thumbnails'), 'update_callback': _upload_callback}, daemon=True)
             t.start()
             st.session_state._upload_thread = t
+        except Exception as e:
+            st.error(f"Failed to start upload processing: {e}")
         except Exception as e:
             st.error(f"Failed to start upload processing: {e}")
 
@@ -708,7 +709,6 @@ def main():
             export_events = st.button("Export events CSV")
             if export_events:
                 try:
-                    from pathlib import Path
                     out = Path.cwd() / 'data' / 'events_export.csv'
                     st.session_state.storage.export_events_csv(out)
                     placeholders['history_events'].markdown(f"Exported events to {out}")
@@ -718,7 +718,6 @@ def main():
             # Attendance export handling
             if placeholders['attendance_export_button']:
                 try:
-                    from pathlib import Path
                     out = Path.cwd() / 'data' / 'attendance_export.csv'
                     st.session_state.storage.export_attendance_csv(out)
                     placeholders['attendance_export_placeholder'].markdown(f"Exported to {out}")
