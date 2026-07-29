@@ -45,7 +45,8 @@ class AttendanceController:
 
         # append and prune old samples
         self._samples.append((ts, pconf, level))
-        cutoff = ts - max(self.required_duration, self.absence_duration)
+        # keep enough history to evaluate both presence and absence windows
+        cutoff = ts - (self.required_duration + self.absence_duration)
         while self._samples and self._samples[0][0] < cutoff:
             self._samples.popleft()
 

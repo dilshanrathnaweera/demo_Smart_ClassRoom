@@ -7,7 +7,7 @@ def make_conf(medium=0.0, high=0.0):
 
 
 def test_attendance_detects_persistent_presence():
-    ctrl = AttendanceController(required_duration_seconds=2, confidence_threshold=0.5, absence_duration_seconds=1, person='student1')
+    ctrl = AttendanceController(required_duration_seconds=1, confidence_threshold=0.5, absence_duration_seconds=1, person='student1')
     t0 = datetime.utcnow()
     # feed samples below threshold
     assert ctrl.process_sample(make_conf(medium=0.3), t0) is None
@@ -34,4 +34,3 @@ def test_attendance_resets_on_absence():
     assert rec is None
     rec = ctrl.process_sample(make_conf(medium=0.9), t0 + timedelta(seconds=6.2))
     assert rec is not None
-*** End Patch
