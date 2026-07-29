@@ -21,6 +21,7 @@ from typing import Dict, Any
 
 from smart_classroom.inference import OnnxClassifier
 from smart_classroom.ac_controller import ACController
+from smart_classroom.attendance import AttendanceController
 
 
 st.set_page_config(page_title="Smart Classroom Edge", layout="wide")
@@ -57,6 +58,9 @@ def init_state():
         st.session_state.lock = threading.Lock()
     if 'ac' not in st.session_state:
         st.session_state.ac = ACController()
+    if 'attendance' not in st.session_state:
+        # configurable: 8s presence required, 0.5 confidence threshold
+        st.session_state.attendance = AttendanceController(required_duration_seconds=8, confidence_threshold=0.5, absence_duration_seconds=3)
     if 'clf' not in st.session_state:
         st.session_state.clf = None
     # storage integration: create Storage and a background writer queue/thread for non-blocking writes
@@ -142,6 +146,18 @@ def camera_thread(cam_index: int):
                     q.put(('add_event', (label, event.message, confidences, event.timestamp)))
                     # add occupancy sample
                     q.put(('add_occupancy', (confidences.get('low',0.0), confidences.get('medium',0.0), confidences.get('high',0.0), ts)))
+                    # attendance detection
+                    try:
+                        att = None
+                        if 'attendance' in st.session_state:
+                            att = st.session_state.attendance.process_sample(confidences, ts)
+                        if att is not None:
+                            # storage.add_attendance(person, timestamp=None, level=None, confidence=None)
+                            q.put(('add_attendance', (att.get('person', 'unknown'), att.get('timestamp'), att.get('level'), att.get('confidence'))))
+                            # also log an event for UI
+                            q.put(('add_event', ('medium', f"attendance:{att.get('person')}", {'low':0.0,'medium':att.get('confidence',0.0),'high':0.0}, att.get('timestamp'))))
+                    except Exception:
+                        pass
                 except Exception:
                     pass
             time.sleep(0.2)
@@ -150,8 +166,8 @@ def camera_thread(cam_index: int):
 
 
 def render_dashboard():
-    # layout with tabs: Live / History
-    tab_live, tab_history = st.tabs(["Live", "History"])
+    # layout with tabs: Live / History / Attendance
+    tab_live, tab_history, tab_att = st.tabs(["Live", "History", "Attendance"])
 
     with tab_live:
         col1, col2 = st.columns([2, 1])
@@ -179,6 +195,14 @@ def render_dashboard():
         st.header("Event Log (persisted)")
         history_events = st.empty()
 
+    with tab_att:
+        st.header("Attendance Records")
+        att_table = st.empty()
+        st.markdown("---")
+        st.header("Export")
+        export_att = st.button("Export attendance CSV")
+        att_export_placeholder = st.empty()
+
     return {
         'img': img_placeholder,
         'hist': hist_placeholder,
@@ -190,6 +214,9 @@ def render_dashboard():
         'events': event_placeholder,
         'history_chart': history_chart,
         'history_events': history_events,
+        'attendance_table': att_table,
+        'attendance_export_placeholder': att_export_placeholder,
+        'attendance_export_button': export_att,
     }
 
 
@@ -290,6 +317,22 @@ def main():
                 placeholders['history_events'].dataframe(pd.DataFrame(pe_rows))
             else:
                 placeholders['history_events'].text('No persisted events')
+            # Attendance table
+            att = st.session_state.storage.get_attendance(limit=1000)
+            if att:
+                placeholders['attendance_table'].dataframe(pd.DataFrame(att))
+            else:
+                placeholders['attendance_table'].text('No attendance records')
+
+            # Export button handling
+            if placeholders['attendance_export_button']:
+                try:
+                    from pathlib import Path
+                    out = Path.cwd() / 'data' / 'attendance_export.csv'
+                    st.session_state.storage.export_attendance_csv(out)
+                    placeholders['attendance_export_placeholder'].markdown(f"Exported to {out}")
+                except Exception as e:
+                    placeholders['attendance_export_placeholder'].text(f"Export failed: {e}")
     except Exception:
         placeholders['history_chart'].text('Failed to load persisted history')
         placeholders['history_events'].text('Failed to load persisted events')
