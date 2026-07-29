@@ -52,8 +52,12 @@ def sidebar_controls():
     model_path = st.sidebar.text_input("ONNX model path", value=MODEL_DEFAULT)
     cam_index = st.sidebar.number_input("Camera index", min_value=0, max_value=10, value=0)
     source = st.sidebar.radio("Source", ["Live Camera", "Upload Video"])
+    # initialize all controls so return values are defined for both branches
+    start_button = False
+    stop_button = False
     upload_file = None
     upload_start = False
+
     if source == 'Upload Video':
         upload_file = st.sidebar.file_uploader("Upload video (mp4, avi, mov)", type=['mp4', 'avi', 'mov'])
         upload_start = st.sidebar.button("Start Upload")
@@ -61,6 +65,7 @@ def sidebar_controls():
     else:
         start_button = st.sidebar.button("Start")
         stop_button = st.sidebar.button("Stop")
+
     return model_path, cam_index, start_button, stop_button, source, upload_file, upload_start
 
 
