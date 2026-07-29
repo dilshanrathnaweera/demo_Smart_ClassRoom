@@ -18,6 +18,7 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 from typing import Dict, Any
+import os
 
 from smart_classroom.inference import OnnxClassifier
 from smart_classroom.ac_controller import ACController
@@ -369,8 +370,38 @@ def main():
 
     # start/stop handling
     if source == 'Live Camera' and start_button and not st.session_state.running:
+        # resolve model path and print diagnostics to sidebar to help NO_SUCHFILE issues
         try:
-            st.session_state.clf = OnnxClassifier(model_path)
+            raw = model_path
+            cwd = os.getcwd()
+            abs_path = os.path.abspath(raw)
+            candidates = [Path(raw), ROOT / raw, Path(cwd) / raw]
+            resolved = None
+            for c in candidates:
+                try:
+                    p = Path(c)
+                except Exception:
+                    p = None
+                if p and p.exists():
+                    resolved = p
+                    break
+
+            # diagnostics
+            try:
+                st.sidebar.markdown(f"**Model diagnostics**")
+                st.sidebar.text(f"cwd: {cwd}")
+                st.sidebar.text(f"raw: {raw}")
+                st.sidebar.text(f"abs: {abs_path}")
+                st.sidebar.text(f"resolved: {resolved}")
+                st.sidebar.text(f"exists: {bool(resolved and resolved.exists())}")
+            except Exception:
+                pass
+
+            # prefer resolved absolute path when available
+            if resolved:
+                st.session_state.clf = OnnxClassifier(str(resolved))
+            else:
+                st.session_state.clf = OnnxClassifier(model_path)
         except Exception as e:
             st.error(f"Failed to load model: {e}")
             return
@@ -394,8 +425,36 @@ def main():
             with open(out_path, 'wb') as f:
                 f.write(upload_file.getbuffer())
             # ensure classifier loaded
+            # resolve model path and diagnostics for upload flow as well
             try:
-                st.session_state.clf = OnnxClassifier(model_path)
+                raw = model_path
+                cwd = os.getcwd()
+                abs_path = os.path.abspath(raw)
+                candidates = [Path(raw), ROOT / raw, Path(cwd) / raw]
+                resolved = None
+                for c in candidates:
+                    try:
+                        p = Path(c)
+                    except Exception:
+                        p = None
+                    if p and p.exists():
+                        resolved = p
+                        break
+
+                try:
+                    st.sidebar.markdown(f"**Model diagnostics**")
+                    st.sidebar.text(f"cwd: {cwd}")
+                    st.sidebar.text(f"raw: {raw}")
+                    st.sidebar.text(f"abs: {abs_path}")
+                    st.sidebar.text(f"resolved: {resolved}")
+                    st.sidebar.text(f"exists: {bool(resolved and resolved.exists())}")
+                except Exception:
+                    pass
+
+                if resolved:
+                    st.session_state.clf = OnnxClassifier(str(resolved))
+                else:
+                    st.session_state.clf = OnnxClassifier(model_path)
             except Exception as e:
                 st.error(f"Failed to load model: {e}")
                 return
