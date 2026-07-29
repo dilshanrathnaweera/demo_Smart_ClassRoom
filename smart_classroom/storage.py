@@ -109,7 +109,12 @@ class Storage:
 
     def _row_to_event_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         conf = json.loads(row["confidences"]) if row["confidences"] else {}
-        return {"id": row["id"], "timestamp": row["timestamp"], "level": row["level"], "message": row["message"], "confidences": conf, "thumbnail_path": row.get('thumbnail_path')}
+        thumb = None
+        try:
+            thumb = row['thumbnail_path']
+        except Exception:
+            thumb = None
+        return {"id": row["id"], "timestamp": row["timestamp"], "level": row["level"], "message": row["message"], "confidences": conf, "thumbnail_path": thumb}
 
     def export_events_csv(self, path: Path):
         import csv

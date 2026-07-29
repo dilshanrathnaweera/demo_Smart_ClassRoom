@@ -35,7 +35,7 @@ def test_add_get_export_events(tmp_path):
     with open(out, newline='', encoding='utf-8') as f:
         reader = csv.reader(f)
         rows = list(reader)
-    assert rows[0] == ['id', 'timestamp', 'level', 'message', 'low', 'medium', 'high']
+    assert rows[0] == ['id', 'timestamp', 'level', 'message', 'low', 'medium', 'high', 'thumbnail_path']
     s.close()
 
 
@@ -52,7 +52,7 @@ def test_attendance_crud_and_export(tmp_path):
     with open(out, newline='', encoding='utf-8') as f:
         reader = csv.reader(f)
         rows = list(reader)
-    assert rows[0] == ['id', 'person', 'timestamp', 'level', 'confidence']
+    assert rows[0] == ['id', 'person', 'timestamp', 'level', 'confidence', 'thumbnail_path']
     s.close()
 
 
