@@ -166,6 +166,15 @@ def camera_thread(cam_index: int):
 
 
 def render_dashboard():
+    # top summary cards
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        today_att_card = st.empty()
+    with c2:
+        total_events_card = st.empty()
+    with c3:
+        current_occ_card = st.empty()
+
     # layout with tabs: Live / History / Attendance
     tab_live, tab_history, tab_att = st.tabs(["Live", "History", "Attendance"])
 
@@ -197,6 +206,16 @@ def render_dashboard():
 
     with tab_att:
         st.header("Attendance Records")
+        # filters: date range and person
+        fcol1, fcol2, fcol3 = st.columns([1, 2, 1])
+        with fcol1:
+            date_range = st.date_input("Date range", [])
+        with fcol2:
+            person_filter = st.text_input("Person (leave empty for all)")
+        with fcol3:
+            att_search = st.text_input("Search attendance (level/confidence)")
+
+        st.markdown("---")
         att_table = st.empty()
         st.markdown("---")
         st.header("Export")
@@ -217,6 +236,9 @@ def render_dashboard():
         'attendance_table': att_table,
         'attendance_export_placeholder': att_export_placeholder,
         'attendance_export_button': export_att,
+        'today_att_card': today_att_card,
+        'total_events_card': total_events_card,
+        'current_occ_card': current_occ_card,
     }
 
 
@@ -297,6 +319,43 @@ def main():
     else:
         placeholders['events'].text("No events yet")
 
+    # update summary cards
+    try:
+        # today's attendance count
+        if st.session_state.storage:
+            from datetime import date
+            today = date.today()
+            atts = st.session_state.storage.get_attendance(limit=None)
+            today_count = 0
+            persons = set()
+            for a in atts:
+                try:
+                    ts = pd.to_datetime(a.get('timestamp')).date()
+                except Exception:
+                    ts = None
+                if ts == today:
+                    today_count += 1
+                    if a.get('person'):
+                        persons.add(a.get('person'))
+            placeholders['today_att_card'].metric("Today's Attendance", today_count)
+            # total events
+            evs = st.session_state.storage.get_events(limit=None)
+            placeholders['total_events_card'].metric('Total Events', len(evs))
+        else:
+            placeholders['today_att_card'].text("No storage")
+            placeholders['total_events_card'].text("No storage")
+    except Exception:
+        placeholders['today_att_card'].text('N/A')
+        placeholders['total_events_card'].text('N/A')
+
+    # current occupancy card
+    try:
+        cur_label = st.session_state.label
+        cur_conf = max(st.session_state.confidences.get('medium', 0.0), st.session_state.confidences.get('high', 0.0))
+        placeholders['current_occ_card'].metric('Current Occupancy', cur_label, f"{cur_conf:.2f}")
+    except Exception:
+        placeholders['current_occ_card'].text('N/A')
+
     # History tab content: load from persistent storage
     try:
         if st.session_state.storage:
@@ -320,11 +379,40 @@ def main():
             # Attendance table
             att = st.session_state.storage.get_attendance(limit=1000)
             if att:
-                placeholders['attendance_table'].dataframe(pd.DataFrame(att))
+                # apply attendance filters/search if present
+                df_att = pd.DataFrame(att)
+                # person filter
+                if 'person_filter' in locals() and person_filter:
+                    df_att = df_att[df_att['person'].astype(str).str.contains(person_filter, case=False, na=False)]
+                # date range filter
+                if 'date_range' in locals() and date_range:
+                    try:
+                        if len(date_range) == 2:
+                            start, end = date_range
+                            df_att['timestamp'] = pd.to_datetime(df_att['timestamp'])
+                            df_att = df_att[(df_att['timestamp'].dt.date >= start) & (df_att['timestamp'].dt.date <= end)]
+                    except Exception:
+                        pass
+                # search
+                if 'att_search' in locals() and att_search:
+                    df_att = df_att[df_att.apply(lambda r: att_search.lower() in str(r.values).lower(), axis=1)]
+                placeholders['attendance_table'].dataframe(df_att)
             else:
                 placeholders['attendance_table'].text('No attendance records')
 
             # Export button handling
+            # Events export button
+            export_events = st.button("Export events CSV")
+            if export_events:
+                try:
+                    from pathlib import Path
+                    out = Path.cwd() / 'data' / 'events_export.csv'
+                    st.session_state.storage.export_events_csv(out)
+                    placeholders['history_events'].markdown(f"Exported events to {out}")
+                except Exception as e:
+                    placeholders['history_events'].text(f"Export failed: {e}")
+
+            # Attendance export handling
             if placeholders['attendance_export_button']:
                 try:
                     from pathlib import Path
