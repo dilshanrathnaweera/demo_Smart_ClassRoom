@@ -22,6 +22,7 @@ from typing import Dict, Any
 from smart_classroom.inference import OnnxClassifier
 from smart_classroom.ac_controller import ACController
 from smart_classroom.attendance import AttendanceController
+from smart_classroom.thumbnail import save_thumbnail
 
 
 st.set_page_config(page_title="Smart Classroom Edge", layout="wide")
@@ -142,8 +143,14 @@ def camera_thread(cam_index: int):
                 # enqueue writes to storage (non-blocking)
                 try:
                     q = st.session_state.storage_write_queue
+                    # capture thumbnail for this frame/event
+                    thumbnail_path = ''
+                    try:
+                        thumbnail_path = save_thumbnail(frame.copy(), timestamp=event.timestamp)
+                    except Exception:
+                        thumbnail_path = ''
                     # add event (use ACEvent timestamp)
-                    q.put(('add_event', (label, event.message, confidences, event.timestamp)))
+                    q.put(('add_event', (label, event.message, confidences, event.timestamp, thumbnail_path)))
                     # add occupancy sample
                     q.put(('add_occupancy', (confidences.get('low',0.0), confidences.get('medium',0.0), confidences.get('high',0.0), ts)))
                     # attendance detection
@@ -153,9 +160,9 @@ def camera_thread(cam_index: int):
                             att = st.session_state.attendance.process_sample(confidences, ts)
                         if att is not None:
                             # storage.add_attendance(person, timestamp=None, level=None, confidence=None)
-                            q.put(('add_attendance', (att.get('person', 'unknown'), att.get('timestamp'), att.get('level'), att.get('confidence'))))
-                            # also log an event for UI
-                            q.put(('add_event', ('medium', f"attendance:{att.get('person')}", {'low':0.0,'medium':att.get('confidence',0.0),'high':0.0}, att.get('timestamp'))))
+                            q.put(('add_attendance', (att.get('person', 'unknown'), att.get('timestamp'), att.get('level'), att.get('confidence'), thumbnail_path)))
+                            # also log an event for UI (include thumbnail)
+                            q.put(('add_event', ('medium', f"attendance:{att.get('person')}", {'low':0.0,'medium':att.get('confidence',0.0),'high':0.0}, att.get('timestamp'), thumbnail_path)))
                     except Exception:
                         pass
                 except Exception:
@@ -370,16 +377,28 @@ def main():
 
             persisted_events = st.session_state.storage.get_events()
             if persisted_events:
-                pe_rows = []
-                for e in persisted_events:
-                    pe_rows.append({'timestamp': e['timestamp'], 'level': e['level'], 'message': e['message'], 'low': e['confidences'].get('low'), 'medium': e['confidences'].get('medium'), 'high': e['confidences'].get('high')})
-                placeholders['history_events'].dataframe(pd.DataFrame(pe_rows))
+                # render recent events with thumbnails (most recent first)
+                for e in persisted_events[:50]:
+                    cols = st.columns([1, 5])
+                    thumb = e.get('thumbnail_path')
+                    if thumb:
+                        try:
+                            p = Path(thumb)
+                            if p.exists():
+                                cols[0].image(str(p), use_column_width=True)
+                            else:
+                                cols[0].text('missing')
+                        except Exception:
+                            cols[0].text('err')
+                    else:
+                        cols[0].text('')
+                    cols[1].markdown(f"**{e.get('timestamp')}** — **{e.get('level')}**  \n{e.get('message')}  \nlow:{e.get('confidences',{}).get('low',0):.2f} medium:{e.get('confidences',{}).get('medium',0):.2f} high:{e.get('confidences',{}).get('high',0):.2f}")
             else:
                 placeholders['history_events'].text('No persisted events')
+
             # Attendance table
             att = st.session_state.storage.get_attendance(limit=1000)
             if att:
-                # apply attendance filters/search if present
                 df_att = pd.DataFrame(att)
                 # person filter
                 if 'person_filter' in locals() and person_filter:
@@ -396,7 +415,15 @@ def main():
                 # search
                 if 'att_search' in locals() and att_search:
                     df_att = df_att[df_att.apply(lambda r: att_search.lower() in str(r.values).lower(), axis=1)]
-                placeholders['attendance_table'].dataframe(df_att)
+                # render attendance rows with thumbnail preview
+                for idx, r in df_att.head(200).iterrows():
+                    c1, c2 = st.columns([1, 6])
+                    tp = r.get('thumbnail_path')
+                    if tp and Path(tp).exists():
+                        c1.image(str(Path(tp)), use_column_width=True)
+                    else:
+                        c1.text('')
+                    c2.write(r.to_dict())
             else:
                 placeholders['attendance_table'].text('No attendance records')
 

@@ -37,7 +37,8 @@ class Storage:
                     timestamp TEXT NOT NULL,
                     level TEXT NOT NULL,
                     message TEXT,
-                    confidences TEXT
+                    confidences TEXT,
+                    thumbnail_path TEXT
                 )
                 """
             )
@@ -49,7 +50,8 @@ class Storage:
                     person TEXT,
                     timestamp TEXT NOT NULL,
                     level TEXT,
-                    confidence REAL
+                    confidence REAL,
+                    thumbnail_path TEXT
                 )
                 """
             )
@@ -65,6 +67,21 @@ class Storage:
                 )
                 """
             )
+            # ensure columns exist for older DBs
+            cur.execute("PRAGMA table_info(events)")
+            cols = [r[1] for r in cur.fetchall()]
+            if 'thumbnail_path' not in cols:
+                try:
+                    cur.execute("ALTER TABLE events ADD COLUMN thumbnail_path TEXT")
+                except Exception:
+                    pass
+            cur.execute("PRAGMA table_info(attendance_records)")
+            cols2 = [r[1] for r in cur.fetchall()]
+            if 'thumbnail_path' not in cols2:
+                try:
+                    cur.execute("ALTER TABLE attendance_records ADD COLUMN thumbnail_path TEXT")
+                except Exception:
+                    pass
 
     def close(self):
         try:
@@ -73,12 +90,12 @@ class Storage:
             pass
 
     # Events
-    def add_event(self, level: str, message: str, confidences: Dict[str, float], timestamp: Optional[datetime] = None) -> int:
+    def add_event(self, level: str, message: str, confidences: Dict[str, float], timestamp: Optional[datetime] = None, thumbnail_path: Optional[str] = None) -> int:
         ts = (timestamp or datetime.utcnow()).isoformat()
         conf_json = json.dumps(confidences)
         with self._lock:
             cur = self._conn.cursor()
-            cur.execute("INSERT INTO events (timestamp, level, message, confidences) VALUES (?, ?, ?, ?)", (ts, level, message, conf_json))
+            cur.execute("INSERT INTO events (timestamp, level, message, confidences, thumbnail_path) VALUES (?, ?, ?, ?, ?)", (ts, level, message, conf_json, thumbnail_path))
             self._conn.commit()
             return cur.lastrowid
 
@@ -92,7 +109,7 @@ class Storage:
 
     def _row_to_event_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         conf = json.loads(row["confidences"]) if row["confidences"] else {}
-        return {"id": row["id"], "timestamp": row["timestamp"], "level": row["level"], "message": row["message"], "confidences": conf}
+        return {"id": row["id"], "timestamp": row["timestamp"], "level": row["level"], "message": row["message"], "confidences": conf, "thumbnail_path": row.get('thumbnail_path')}
 
     def export_events_csv(self, path: Path):
         import csv
@@ -100,17 +117,17 @@ class Storage:
         rows = self.get_events(limit=None)[::-1]  # oldest first
         with open(path, "w", newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(["id", "timestamp", "level", "message", "low", "medium", "high"])
+            writer.writerow(["id", "timestamp", "level", "message", "low", "medium", "high", "thumbnail_path"])
             for r in rows:
                 conf = r.get("confidences", {})
-                writer.writerow([r["id"], r["timestamp"], r["level"], r["message"], conf.get("low"), conf.get("medium"), conf.get("high")])
+                writer.writerow([r["id"], r["timestamp"], r["level"], r["message"], conf.get("low"), conf.get("medium"), conf.get("high"), r.get('thumbnail_path')])
 
     # Attendance
-    def add_attendance(self, person: str, timestamp: Optional[datetime] = None, level: Optional[str] = None, confidence: Optional[float] = None) -> int:
+    def add_attendance(self, person: str, timestamp: Optional[datetime] = None, level: Optional[str] = None, confidence: Optional[float] = None, thumbnail_path: Optional[str] = None) -> int:
         ts = (timestamp or datetime.utcnow()).isoformat()
         with self._lock:
             cur = self._conn.cursor()
-            cur.execute("INSERT INTO attendance_records (person, timestamp, level, confidence) VALUES (?, ?, ?, ?)", (person, ts, level, confidence))
+            cur.execute("INSERT INTO attendance_records (person, timestamp, level, confidence, thumbnail_path) VALUES (?, ?, ?, ?, ?)", (person, ts, level, confidence, thumbnail_path))
             self._conn.commit()
             return cur.lastrowid
 
@@ -127,9 +144,9 @@ class Storage:
         rows = self.get_attendance(limit=None)[::-1]
         with open(path, "w", newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(["id", "person", "timestamp", "level", "confidence"])
+            writer.writerow(["id", "person", "timestamp", "level", "confidence", "thumbnail_path"])
             for r in rows:
-                writer.writerow([r.get("id"), r.get("person"), r.get("timestamp"), r.get("level"), r.get("confidence")])
+                writer.writerow([r.get("id"), r.get("person"), r.get("timestamp"), r.get("level"), r.get("confidence"), r.get('thumbnail_path')])
 
     # Occupancy history
     def add_occupancy(self, low: float, medium: float, high: float, timestamp: Optional[datetime] = None) -> int:
