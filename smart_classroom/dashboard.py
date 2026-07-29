@@ -59,15 +59,46 @@ def sidebar_controls():
     upload_file = None
     upload_start = False
 
+    # try to resolve model path candidates (allow relative to repo root or cwd)
+    try:
+        raw = model_path
+        cwd = os.getcwd()
+        candidates = [Path(raw), ROOT / raw, Path(cwd) / raw]
+        resolved = None
+        for c in candidates:
+            try:
+                p = Path(c)
+            except Exception:
+                p = None
+            if p and p.exists():
+                resolved = p
+                break
+    except Exception:
+        resolved = None
+
+    model_exists = bool(resolved and resolved.exists())
+
+    # show a friendly warning if no model is available
+    if not model_exists:
+        try:
+            st.sidebar.warning(
+                "ONNX model not found. Please provide a model file (e.g. model.onnx) in the repository root or enter an absolute path.\n"
+                "Start/Upload are disabled until a valid model path is provided."
+            )
+        except Exception:
+            pass
+
     if source == 'Upload Video':
         upload_file = st.sidebar.file_uploader("Upload video (mp4, avi, mov)", type=['mp4', 'avi', 'mov'])
-        upload_start = st.sidebar.button("Start Upload")
+        # disable start upload if model missing
+        upload_start = st.sidebar.button("Start Upload", disabled=(not model_exists))
         stop_button = st.sidebar.button("Stop")
     else:
-        start_button = st.sidebar.button("Start")
+        # disable start if model missing
+        start_button = st.sidebar.button("Start", disabled=(not model_exists))
         stop_button = st.sidebar.button("Stop")
 
-    return model_path, cam_index, start_button, stop_button, source, upload_file, upload_start
+    return model_path, cam_index, start_button, stop_button, source, upload_file, upload_start, resolved
 
 
 def init_state():
@@ -363,30 +394,18 @@ def render_dashboard():
 
 
 def main():
-    model_path, cam_index, start_button, stop_button, source, upload_file, upload_start = sidebar_controls()
+    model_path, cam_index, start_button, stop_button, source, upload_file, upload_start, resolved = sidebar_controls()
     init_state()
 
     placeholders = render_dashboard()
 
     # start/stop handling
     if source == 'Live Camera' and start_button and not st.session_state.running:
-        # resolve model path and print diagnostics to sidebar to help NO_SUCHFILE issues
+        # use the resolved model path determined in the sidebar
         try:
             raw = model_path
             cwd = os.getcwd()
             abs_path = os.path.abspath(raw)
-            candidates = [Path(raw), ROOT / raw, Path(cwd) / raw]
-            resolved = None
-            for c in candidates:
-                try:
-                    p = Path(c)
-                except Exception:
-                    p = None
-                if p and p.exists():
-                    resolved = p
-                    break
-
-            # diagnostics
             try:
                 st.sidebar.markdown(f"**Model diagnostics**")
                 st.sidebar.text(f"cwd: {cwd}")
@@ -397,11 +416,11 @@ def main():
             except Exception:
                 pass
 
-            # prefer resolved absolute path when available
-            if resolved:
-                st.session_state.clf = OnnxClassifier(str(resolved))
-            else:
-                st.session_state.clf = OnnxClassifier(model_path)
+            if not (resolved and resolved.exists()):
+                st.error("Cannot start: ONNX model not found. Please provide a valid model path in the sidebar.")
+                return
+
+            st.session_state.clf = OnnxClassifier(str(resolved))
         except Exception as e:
             st.error(f"Failed to load model: {e}")
             return
@@ -424,23 +443,11 @@ def main():
             # stream bytes to file
             with open(out_path, 'wb') as f:
                 f.write(upload_file.getbuffer())
-            # ensure classifier loaded
-            # resolve model path and diagnostics for upload flow as well
+            # ensure classifier loaded using resolved path from sidebar
             try:
                 raw = model_path
                 cwd = os.getcwd()
                 abs_path = os.path.abspath(raw)
-                candidates = [Path(raw), ROOT / raw, Path(cwd) / raw]
-                resolved = None
-                for c in candidates:
-                    try:
-                        p = Path(c)
-                    except Exception:
-                        p = None
-                    if p and p.exists():
-                        resolved = p
-                        break
-
                 try:
                     st.sidebar.markdown(f"**Model diagnostics**")
                     st.sidebar.text(f"cwd: {cwd}")
@@ -451,10 +458,11 @@ def main():
                 except Exception:
                     pass
 
-                if resolved:
-                    st.session_state.clf = OnnxClassifier(str(resolved))
-                else:
-                    st.session_state.clf = OnnxClassifier(model_path)
+                if not (resolved and resolved.exists()):
+                    st.error("Cannot start upload: ONNX model not found. Please provide a valid model path in the sidebar.")
+                    return
+
+                st.session_state.clf = OnnxClassifier(str(resolved))
             except Exception as e:
                 st.error(f"Failed to load model: {e}")
                 return
